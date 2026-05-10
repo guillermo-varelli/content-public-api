@@ -18,9 +18,19 @@ Category         *string    `json:"category"`
 	LastUpdated      *time.Time `json:"last_updated"`
 }
 
-type ContentPage struct {
-	Data     []Content `json:"data"`
-	Page     int       `json:"page"`
-	PageSize int       `json:"page_size"`
-	HasNext  bool      `json:"has_next"`
+type SectionItem struct {
+	ID               int64  `json:"id"`
+	Title            string `json:"title"`
+	Slug             string `json:"slug"`
+	ShortDescription string `json:"short_description"`
+	Message          string `json:"message"`
+}
+
+type Section struct {
+	Name  string        `json:"name"`
+	Items []SectionItem `json:"items"`
+}
+
+type SectionsResponse struct {
+	Sections []Section `json:"sections"`
 }

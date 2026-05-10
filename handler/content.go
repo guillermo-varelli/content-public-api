@@ -3,24 +3,18 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	gocache "github.com/patrickmn/go-cache"
 
-	"content-public-api/model"
 	"content-public-api/store"
 )
 
 const (
-	defaultPage     = 1
-	defaultPageSize = 20
-	maxPageSize     = 100
-	cacheTTL        = 15 * time.Second
-	queryTimeout    = 5 * time.Second
+	cacheTTL     = 15 * time.Second
+	queryTimeout = 5 * time.Second
 )
 
 type ContentHandler struct {
@@ -35,20 +29,8 @@ func NewContentHandler(s *store.ContentStore) *ContentHandler {
 	}
 }
 
-func (h *ContentHandler) SearchContent(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	if q == "" {
-		http.Error(w, "q is required", http.StatusBadRequest)
-		return
-	}
-
-	page, pageSize, err := parseParams(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	cacheKey := fmt.Sprintf("search:q=%s:page=%d:page_size=%d", q, page, pageSize)
+func (h *ContentHandler) GetSections(w http.ResponseWriter, r *http.Request) {
+	const cacheKey = "sections"
 
 	if cached, found := h.cache.Get(cacheKey); found {
 		writeJSON(w, cached)
@@ -58,22 +40,43 @@ func (h *ContentHandler) SearchContent(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
 	defer cancel()
 
-	rows, err := h.store.SearchContent(ctx, q, page, pageSize)
+	result, err := h.store.GetGroupedSections(ctx)
+	if err != nil {
+		log.Printf("GetSections error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	h.cache.Set(cacheKey, result, gocache.DefaultExpiration)
+	writeJSON(w, result)
+}
+
+func (h *ContentHandler) SearchContent(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		http.Error(w, "q is required", http.StatusBadRequest)
+		return
+	}
+
+	cacheKey := "search:q=" + q
+
+	if cached, found := h.cache.Get(cacheKey); found {
+		writeJSON(w, cached)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
+	defer cancel()
+
+	rows, err := h.store.SearchContent(ctx, q)
 	if err != nil {
 		log.Printf("SearchContent error: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	result := model.ContentPage{
-		Data:     rows,
-		Page:     page,
-		PageSize: pageSize,
-		HasNext:  len(rows) == pageSize,
-	}
-
-	h.cache.Set(cacheKey, result, gocache.DefaultExpiration)
-	writeJSON(w, result)
+	h.cache.Set(cacheKey, rows, gocache.DefaultExpiration)
+	writeJSON(w, rows)
 }
 
 func (h *ContentHandler) GetContentBySlug(w http.ResponseWriter, r *http.Request) {
@@ -106,66 +109,6 @@ func (h *ContentHandler) GetContentBySlug(w http.ResponseWriter, r *http.Request
 
 	h.cache.Set(cacheKey, content, gocache.DefaultExpiration)
 	writeJSON(w, content)
-}
-
-func (h *ContentHandler) GetContent(w http.ResponseWriter, r *http.Request) {
-	page, pageSize, err := parseParams(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	cacheKey := fmt.Sprintf("content:page=%d:page_size=%d", page, pageSize)
-
-	if cached, found := h.cache.Get(cacheKey); found {
-		writeJSON(w, cached)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
-	defer cancel()
-
-	rows, err := h.store.GetPublishedContent(ctx, page, pageSize)
-	if err != nil {
-		log.Printf("GetContent error: %v", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	result := model.ContentPage{
-		Data:     rows,
-		Page:     page,
-		PageSize: pageSize,
-		HasNext:  len(rows) == pageSize,
-	}
-
-	h.cache.Set(cacheKey, result, gocache.DefaultExpiration)
-	writeJSON(w, result)
-}
-
-func parseParams(r *http.Request) (page, pageSize int, err error) {
-	page = defaultPage
-	if p := r.URL.Query().Get("page"); p != "" {
-		v, e := strconv.Atoi(p)
-		if e != nil || v <= 0 {
-			return 0, 0, fmt.Errorf("invalid page")
-		}
-		page = v
-	}
-
-	pageSize = defaultPageSize
-	if ps := r.URL.Query().Get("page_size"); ps != "" {
-		v, e := strconv.Atoi(ps)
-		if e != nil || v <= 0 {
-			return 0, 0, fmt.Errorf("invalid page_size")
-		}
-		if v > maxPageSize {
-			v = maxPageSize
-		}
-		pageSize = v
-	}
-
-	return page, pageSize, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
